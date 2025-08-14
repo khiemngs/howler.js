@@ -2519,8 +2519,6 @@
     try {
       if (typeof AudioContext !== 'undefined') {
         Howler.ctx = new AudioContext();
-      } else if (typeof webkitAudioContext !== 'undefined') {
-        Howler.ctx = new webkitAudioContext();
       } else {
         Howler.usingWebAudio = false;
       }
