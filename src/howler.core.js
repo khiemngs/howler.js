@@ -2532,14 +2532,18 @@
       Howler.usingWebAudio = false;
     }
 
-    // Check if a webview is being used on iOS8 or earlier (rather than the browser).
-    // If it is, disable Web Audio as it causes crashing.
+    // Check if a webview is being used on older iOS versions (rather than the browser).
+    // If it is, disable Web Audio as it can cause issues in webviews.
     var iOS = (/iP(hone|od|ad)/.test(Howler._navigator && Howler._navigator.platform));
-    var appVersion = Howler._navigator && Howler._navigator.appVersion.match(/OS (\d+)_(\d+)_?(\d+)?/);
+    var appVersion = Howler._navigator && Howler._navigator.appVersion.match(/OS (\d+)[._](\d+)[._]?(\d+)?/);
     var version = appVersion ? parseInt(appVersion[1], 10) : null;
-    if (iOS && version && version < 9) {
-      var safari = /safari/.test(Howler._navigator && Howler._navigator.userAgent.toLowerCase());
-      if (Howler._navigator && !safari) {
+    if (iOS && version && version < 13) {
+      // Improved Safari/webview detection for modern iOS
+      var userAgent = Howler._navigator && Howler._navigator.userAgent.toLowerCase();
+      var isSafari = /safari/.test(userAgent) && !/crios|fxios|opios/.test(userAgent);
+      var isWebView = !isSafari && (/webkit/.test(userAgent) || /mobile/.test(userAgent));
+      
+      if (Howler._navigator && isWebView) {
         Howler.usingWebAudio = false;
       }
     }
