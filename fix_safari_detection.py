@@ -7,12 +7,12 @@ with open('/home/daytona/howler.js/src/howler.core.js', 'r') as f:
 
 # Update Safari version detection logic
 # 1. Improve the version parsing regex to handle edge cases
-old_version_regex = r'var safariVersion = ua\.match\(/Version\/\(\.\*\?\) /\);'
-new_version_regex = 'var safariVersion = ua.match(/Version\/([\\d\\.]+)/);'
+old_version_regex = r'var safariVersion = ua\.match\(/Version/\(\.\*\?\) /\);'
+new_version_regex = r'var safariVersion = ua.match(/Version/([\d\.]+)/);'
 
 # 2. Update the version threshold from < 15 to < 17
 old_threshold = r'var isOldSafari = \(checkSafari && safariVersion && parseInt\(safariVersion\[1\], 10\) < 15\);'
-new_threshold = 'var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 17);'
+new_threshold = r'var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 17);'
 
 # Apply the changes
 content = re.sub(old_version_regex, new_version_regex, content)
@@ -25,3 +25,4 @@ with open('/home/daytona/howler.js/src/howler.core.js', 'w') as f:
 print("Successfully updated Safari version detection logic:")
 print("- Improved version parsing regex to handle edge cases")
 print("- Updated version threshold from < 15 to < 17")
+
