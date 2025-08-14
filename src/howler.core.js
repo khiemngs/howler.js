@@ -204,6 +204,33 @@
       // Keeps track of the suspend/resume state of the AudioContext.
       self.state = self.ctx ? self.ctx.state || 'suspended' : 'suspended';
 
+      // Add state change listeners for better AudioContext state management
+      if (self.ctx && typeof self.ctx.addEventListener === 'function') {
+        // Listen for state changes to keep our internal state in sync
+        self.ctx.addEventListener('statechange', function() {
+          self.state = self.ctx.state;
+          
+          // Handle interrupted state on mobile devices
+          if (self.ctx.state === 'interrupted') {
+            // Clear any pending suspend timer since we're interrupted
+            if (self._suspendTimer) {
+              clearTimeout(self._suspendTimer);
+              self._suspendTimer = null;
+            }
+            
+            // Emit interrupt event to all Howls
+            for (var i = 0; i < self._howls.length; i++) {
+              self._howls[i]._emit('interrupt');
+            }
+          } else if (self.ctx.state === 'running' && self.state !== 'running') {
+            // AudioContext resumed from interrupted state
+            for (var i = 0; i < self._howls.length; i++) {
+              self._howls[i]._emit('resume');
+            }
+          }
+        });
+      }
+
       // Automatically begin the 30-second suspend process
       self._autoSuspend();
 
@@ -265,11 +292,12 @@
 
       // Opera version <33 has mixed MP3 support, so we need to check for and block it.
       var ua = self._navigator ? self._navigator.userAgent : '';
-      var checkOpera = ua.match(/OPR\/(\d+)/g);
-      var isOldOpera = (checkOpera && parseInt(checkOpera[0].split('/')[1], 10) < 33);
+      var checkOpera = ua.match(/OPR\/(\d+)/);
+      var isOldOpera = (checkOpera && parseInt(checkOpera[1], 10) < 33);
       var checkSafari = ua.indexOf('Safari') !== -1 && ua.indexOf('Chrome') === -1;
-      var safariVersion = ua.match(/Version\/(.*?) /);
-      var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 15);
+      var safariVersion = ua.match(/Version\/([\d\.]+)/);
+      var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 17);
+      var isWebMCapableSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) >= 15);
 
       self._codecs = {
         mp3: !!(!isOldOpera && (mpegTest || audioTest.canPlayType('audio/mp3;').replace(/^no$/, ''))),
@@ -283,8 +311,8 @@
         m4a: !!(audioTest.canPlayType('audio/x-m4a;') || audioTest.canPlayType('audio/m4a;') || audioTest.canPlayType('audio/aac;')).replace(/^no$/, ''),
         m4b: !!(audioTest.canPlayType('audio/x-m4b;') || audioTest.canPlayType('audio/m4b;') || audioTest.canPlayType('audio/aac;')).replace(/^no$/, ''),
         mp4: !!(audioTest.canPlayType('audio/x-mp4;') || audioTest.canPlayType('audio/mp4;') || audioTest.canPlayType('audio/aac;')).replace(/^no$/, ''),
-        weba: !!(!isOldSafari && audioTest.canPlayType('audio/webm; codecs="vorbis"').replace(/^no$/, '')),
-        webm: !!(!isOldSafari && audioTest.canPlayType('audio/webm; codecs="vorbis"').replace(/^no$/, '')),
+        weba: !!((!checkSafari || isWebMCapableSafari) && audioTest.canPlayType('audio/webm; codecs="vorbis"').replace(/^no$/, '')),
+        webm: !!((!checkSafari || isWebMCapableSafari) && audioTest.canPlayType('audio/webm; codecs="vorbis"').replace(/^no$/, '')),
         dolby: !!audioTest.canPlayType('audio/mp4; codecs="ec-3"').replace(/^no$/, ''),
         flac: !!(audioTest.canPlayType('audio/x-flac;') || audioTest.canPlayType('audio/flac;')).replace(/^no$/, '')
       };
@@ -521,13 +549,22 @@
       if (self.state === 'running' && self.ctx.state !== 'interrupted' && self._suspendTimer) {
         clearTimeout(self._suspendTimer);
         self._suspendTimer = null;
-      } else if (self.state === 'suspended' || self.state === 'running' && self.ctx.state === 'interrupted') {
+      } else if (self.state === 'suspended' || self.state === 'interrupted' || (self.state === 'running' && self.ctx.state === 'interrupted')) {
+        // Enhanced resume logic with better error handling
         self.ctx.resume().then(function() {
           self.state = 'running';
 
           // Emit to all Howls that the audio has resumed.
           for (var i=0; i<self._howls.length; i++) {
             self._howls[i]._emit('resume');
+          }
+        }).catch(function(err) {
+          // Handle resume failures gracefully
+          console.warn('AudioContext resume failed:', err);
+          
+          // Try to recover by creating a new AudioContext if needed
+          if (self.ctx.state === 'closed') {
+            self._recoverAudioContext();
           }
         });
 
@@ -2248,7 +2285,7 @@
 
       if (parent._webAudio) {
         // Create the gain node for controlling volume (the source will connect to this).
-        self._node = (typeof Howler.ctx.createGain === 'undefined') ? Howler.ctx.createGainNode() : Howler.ctx.createGain();
+        self._node = Howler.ctx.createGain();
         self._node.gain.setValueAtTime(volume, Howler.ctx.currentTime);
         self._node.paused = true;
         self._node.connect(Howler.masterGain);
@@ -2509,7 +2546,67 @@
   /**
    * Setup the audio context when available, or switch to HTML5 Audio mode.
    */
-  var setupAudioContext = function() {
+
+    /**
+     * Recover from a closed or corrupted AudioContext by creating a new one.
+     * This can happen on mobile devices when the app is backgrounded for too long.
+     * @return {Howler}
+     */
+    _recoverAudioContext: function() {
+      var self = this;
+      
+      if (!self.usingWebAudio) {
+        return self;
+      }
+      
+      // Store the old context for cleanup
+      var oldCtx = self.ctx;
+      
+      try {
+        // Create a new AudioContext
+        if (typeof AudioContext !== 'undefined') {
+          self.ctx = new AudioContext();
+        } else {
+          self.usingWebAudio = false;
+          return self;
+        }
+        
+        // Update state
+        self.state = self.ctx.state || 'suspended';
+        
+        // Recreate master gain node
+        if (self.masterGain) {
+          self.masterGain = self.ctx.createGain();
+          self.masterGain.gain.setValueAtTime(self._muted ? 0 : self._volume, self.ctx.currentTime);
+          self.masterGain.connect(self.ctx.destination);
+        }
+        
+        // Re-setup state change listeners
+        if (typeof self.ctx.addEventListener === 'function') {
+          self.ctx.addEventListener('statechange', function() {
+            self.state = self.ctx.state;
+          });
+        }
+        
+        // Notify all Howls that the context has been recovered
+        for (var i = 0; i < self._howls.length; i++) {
+          self._howls[i]._emit('contextrecovered');
+        }
+        
+        // Clean up old context
+        if (oldCtx && typeof oldCtx.close === 'function') {
+          oldCtx.close();
+        }
+        
+      } catch (e) {
+        console.error('Failed to recover AudioContext:', e);
+        self.usingWebAudio = false;
+      }
+      
+      return self;
+    },
+
+    var setupAudioContext = function() {
     // If we have already detected that Web Audio isn't supported, don't run this step again.
     if (!Howler.usingWebAudio) {
       return;
@@ -2519,8 +2616,6 @@
     try {
       if (typeof AudioContext !== 'undefined') {
         Howler.ctx = new AudioContext();
-      } else if (typeof webkitAudioContext !== 'undefined') {
-        Howler.ctx = new webkitAudioContext();
       } else {
         Howler.usingWebAudio = false;
       }
@@ -2533,21 +2628,25 @@
       Howler.usingWebAudio = false;
     }
 
-    // Check if a webview is being used on iOS8 or earlier (rather than the browser).
-    // If it is, disable Web Audio as it causes crashing.
+    // Check if a webview is being used on older iOS versions (rather than the browser).
+    // If it is, disable Web Audio as it can cause issues in webviews.
     var iOS = (/iP(hone|od|ad)/.test(Howler._navigator && Howler._navigator.platform));
-    var appVersion = Howler._navigator && Howler._navigator.appVersion.match(/OS (\d+)_(\d+)_?(\d+)?/);
+    var appVersion = Howler._navigator && Howler._navigator.appVersion.match(/OS (\d+)[._](\d+)[._]?(\d+)?/);
     var version = appVersion ? parseInt(appVersion[1], 10) : null;
-    if (iOS && version && version < 9) {
-      var safari = /safari/.test(Howler._navigator && Howler._navigator.userAgent.toLowerCase());
-      if (Howler._navigator && !safari) {
+    if (iOS && version && version < 13) {
+      // Improved Safari/webview detection for modern iOS
+      var userAgent = Howler._navigator && Howler._navigator.userAgent.toLowerCase();
+      var isSafari = /safari/.test(userAgent) && !/crios|fxios|opios/.test(userAgent);
+      var isWebView = !isSafari && (/webkit/.test(userAgent) || /mobile/.test(userAgent));
+      
+      if (Howler._navigator && isWebView) {
         Howler.usingWebAudio = false;
       }
     }
 
     // Create and expose the master GainNode when using Web Audio (useful for plugins or advanced usage).
     if (Howler.usingWebAudio) {
-      Howler.masterGain = (typeof Howler.ctx.createGain === 'undefined') ? Howler.ctx.createGainNode() : Howler.ctx.createGain();
+      Howler.masterGain = Howler.ctx.createGain();
       Howler.masterGain.gain.setValueAtTime(Howler._muted ? 0 : Howler._volume, Howler.ctx.currentTime);
       Howler.masterGain.connect(Howler.ctx.destination);
     }
