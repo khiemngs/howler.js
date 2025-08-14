@@ -406,10 +406,8 @@
       };
 
       // Setup a touch start listener to attempt an unlock in.
-      document.addEventListener('touchstart', unlock, true);
       document.addEventListener('touchend', unlock, true);
       document.addEventListener('click', unlock, true);
-      document.addEventListener('keydown', unlock, true);
 
       return self;
     },
