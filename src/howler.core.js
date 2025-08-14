@@ -268,8 +268,8 @@
       var checkOpera = ua.match(/OPR\/(\d+)/g);
       var isOldOpera = (checkOpera && parseInt(checkOpera[0].split('/')[1], 10) < 33);
       var checkSafari = ua.indexOf('Safari') !== -1 && ua.indexOf('Chrome') === -1;
-      var safariVersion = ua.match(/Version\/(.*?) /);
-      var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 15);
+      var safariVersion = ua.match(/Version\/([\d\.]+)/);
+      var isOldSafari = (checkSafari && safariVersion && parseInt(safariVersion[1], 10) < 17);
 
       self._codecs = {
         mp3: !!(!isOldOpera && (mpegTest || audioTest.canPlayType('audio/mp3;').replace(/^no$/, ''))),
